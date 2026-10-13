@@ -8,7 +8,7 @@ so every plot below comes from the real saved models.
 Tabs:
  1. Model comparison  - metrics table, calibration plot, P(churn) by true class
  2. Distributions     - any feature, coloured by churn
- 3. Threshold & cost  - slider -> confusion matrix + business cost
+ 3. Threshold & gain  - slider -> confusion matrix + net gain vs doing nothing
  4. Coefficients      - top features by |weight| for the three implementations
 """
 
@@ -22,7 +22,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import torch
 
-from pipeline import ARTIFACTS, TARGET, LogisticRegressionNN, business_cost, engineer_features
+from pipeline import ARTIFACTS, TARGET, LogisticRegressionNN, engineer_features, net_gain
 
 torch.set_default_dtype(torch.float64)
 
@@ -136,13 +136,13 @@ def target_plot():
 
 
 # ---------------------------------------------------------------------------
-# Tab 3: threshold & business cost
+# Tab 3: threshold & net gain
 # ---------------------------------------------------------------------------
 GRID = np.round(np.arange(0.01, 1.00, 0.01), 2)
 
 
-def threshold_view(model, threshold, offer_cost, horizon, save_rate):
-    costs = dict(offer_cost=offer_cost, horizon_months=horizon, save_rate=save_rate)
+def threshold_view(model, threshold, call_cost, horizon, save_rate):
+    costs = dict(call_cost=call_cost, horizon_months=horizon, save_rate=save_rate)
     p = proba[model]
     pred = p >= threshold
     tp = int((pred & (y_test == 1)).sum())
@@ -153,38 +153,37 @@ def threshold_view(model, threshold, offer_cost, horizon, save_rate):
     cm = go.Figure(go.Heatmap(
         z=[[tn, fp], [fn, tp]], x=["Predicted: stays", "Predicted: churns"],
         y=["Actual: stays", "Actual: churns"], colorscale="Blues", showscale=False,
-        text=[[f"TN<br>{tn}", f"FP (wasted offer)<br>{fp}"], [f"FN (missed churner)<br>{fn}", f"TP<br>{tp}"]],
+        text=[[f"TN<br>{tn}", f"FP (wasted call)<br>{fp}"], [f"FN (missed churner)<br>{fn}", f"TP<br>{tp}"]],
         texttemplate="%{text}", textfont=dict(size=16)))
     cm.update_layout(title=f"Confusion matrix on test set, threshold {threshold:.2f}",
                      height=400, yaxis=dict(autorange="reversed"))
 
-    curve = [business_cost(y_test, p >= t, mc_test, **costs) for t in GRID]
-    best_t = float(GRID[int(np.argmin(curve))])
-    nobody = business_cost(y_test, np.zeros_like(pred), mc_test, **costs)
-    everyone = business_cost(y_test, np.ones_like(pred), mc_test, **costs)
+    curve = [net_gain(y_test, p >= t, mc_test, **costs) for t in GRID]
+    best_t = float(GRID[int(np.argmax(curve))])
+    everyone = net_gain(y_test, np.ones_like(pred), mc_test, **costs)
     fig = go.Figure(go.Scatter(x=GRID, y=curve, mode="lines", name=model, line=dict(color=COLORS[model])))
-    fig.add_hline(y=nobody, line_dash="dot", annotation_text="contact nobody")
-    fig.add_hline(y=everyone, line_dash="dot", annotation_text="contact everyone",
+    fig.add_hline(y=0, line_dash="dot", annotation_text="call nobody ($0)")
+    fig.add_hline(y=everyone, line_dash="dot", annotation_text="call everyone",
                   annotation_position="bottom right")
     fig.add_vline(x=threshold, line_color="black", annotation_text="current")
     fig.add_vline(x=meta["thresholds"][model], line_dash="dash", line_color="green",
                   annotation_text="chosen on validation", annotation_position="bottom left")
-    fig.add_trace(go.Scatter(x=[best_t], y=[min(curve)], mode="markers", marker=dict(size=12, color="red"),
-                             name=f"min on test curve ({best_t:.2f})"))
-    fig.update_layout(title="Total business cost on test set vs threshold", xaxis_title="Threshold",
-                      yaxis_title="Total cost ($)", height=400)
+    fig.add_trace(go.Scatter(x=[best_t], y=[max(curve)], mode="markers", marker=dict(size=12, color="red"),
+                             name=f"max on test curve ({best_t:.2f})"))
+    fig.update_layout(title="Net gain vs doing nothing, test set", xaxis_title="Threshold",
+                      yaxis_title="Net gain ($)", height=400)
 
-    cost = business_cost(y_test, pred, mc_test, **costs)
+    gain = net_gain(y_test, pred, mc_test, **costs)
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     summary = (
-        f"### Business cost: ${cost:,.0f}\n"
+        f"### Net gain vs calling nobody: ${gain:,.0f}\n"
         f"- Customers contacted: **{tp + fp}** of {len(p)}\n"
         f"- Recall (churners caught): **{recall:.1%}**, precision (contacts who were churners): **{precision:.1%}**\n"
-        f"- Baselines: contact nobody ${nobody:,.0f}, contact everyone ${everyone:,.0f}\n"
-        f"- Saving vs best baseline: **${min(nobody, everyone) - cost:,.0f}**\n"
-        f"- Threshold chosen on validation under the default costs: **{meta['thresholds'][model]:.2f}**; "
-        f"cost-minimising threshold on this test curve with the costs above: **{best_t:.2f}**"
+        f"- Baselines: call nobody $0, call everyone ${everyone:,.0f}\n"
+        f"- Extra gain vs best baseline: **${gain - max(0.0, everyone):,.0f}**\n"
+        f"- Threshold chosen on validation under the default assumptions: **{meta['thresholds'][model]:.2f}**; "
+        f"gain-maximising threshold on this test curve with the assumptions above: **{best_t:.2f}**"
     )
     return cm, fig, summary
 
@@ -213,12 +212,12 @@ with gr.Blocks(title="Telco churn: retention targeting") as demo:
         "# Telco churn: who should get a retention offer?\n"
         "Logistic regression trained three ways (scikit-learn, manual PyTorch, nn.Module + optim) "
         "on the same split. All numbers are on the held-out **test set** "
-        f"({meta['split']['test']} customers). Default cost assumptions: offer ${c['offer_cost']:.0f}, "
+        f"({meta['split']['test']} customers). Default cost assumptions: call cost ${c['call_cost']:.0f}, "
         f"lost revenue = MonthlyCharges x {c['horizon_months']} months, offer saves "
         f"{c['save_rate']:.0%} of contacted churners."
     )
     with gr.Tab("Model comparison"):
-        gr.Markdown("**Test metrics** (each model at its own cost-optimal threshold chosen on validation)")
+        gr.Markdown("**Test metrics** (each model at its own gain-maximising threshold chosen on validation; net gain is vs calling nobody)")
         gr.Dataframe(metrics_table.reset_index(names="model").round(4))
         gr.Markdown("**Agreement between implementations** (max absolute differences)")
         gr.Dataframe(agreement_table())
@@ -236,20 +235,20 @@ with gr.Blocks(title="Telco churn: retention targeting") as demo:
         gr.Plot(target_plot())
         feat.change(feature_plot, feat, feat_plot)
 
-    with gr.Tab("Threshold & cost"):
+    with gr.Tab("Threshold & net gain"):
         with gr.Row():
             t_model = gr.Dropdown(MODELS, value="sklearn", label="Model")
             t_slider = gr.Slider(0.0, 1.0, value=meta["thresholds"]["sklearn"], step=0.01,
                                  label="Decision threshold: contact if P(churn) >= threshold")
         with gr.Row():
-            in_offer = gr.Number(c["offer_cost"], label="Offer cost ($)")
+            in_call = gr.Number(c["call_cost"], label="Call cost ($)")
             in_horizon = gr.Number(c["horizon_months"], label="Revenue horizon (months)")
             in_save = gr.Slider(0.0, 1.0, value=c["save_rate"], step=0.05, label="Save rate of offer")
         t_summary = gr.Markdown()
         with gr.Row():
             t_cm = gr.Plot()
             t_curve = gr.Plot()
-        inputs = [t_model, t_slider, in_offer, in_horizon, in_save]
+        inputs = [t_model, t_slider, in_call, in_horizon, in_save]
         for comp in inputs:
             comp.change(threshold_view, inputs, [t_cm, t_curve, t_summary])
         demo.load(threshold_view, inputs, [t_cm, t_curve, t_summary])

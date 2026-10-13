@@ -4,7 +4,7 @@ Assignment 1 - training pipeline (run with `uv run python main.py train`).
 Business problem: a telecom retention team decides which customers get a
 retention offer (e.g. a discount). The model estimates P(churn) per customer;
 the team contacts everyone above a threshold. The threshold is chosen to
-minimise the expected business cost (see the constants below), not fixed at 0.5.
+maximise the net gain vs doing nothing (see the constants below), not fixed at 0.5.
 
 Steps:
  1. load data + fix TotalCharges blanks             (pipeline.load_raw)
@@ -13,8 +13,8 @@ Steps:
  4. fit ColumnTransformer on TRAIN only, transform val/test
  5. same L2 logistic regression three ways:
       a. scikit-learn  b. manual PyTorch loop  c. nn.Module + torch.optim
- 6. pick each model's cost-optimal threshold on VALIDATION
- 7. report metrics + cost on TEST, compare against naive baselines and
+ 6. pick each model's gain-maximising threshold on VALIDATION
+ 7. report metrics + net gain on TEST, compare against naive baselines and
     against each other, save everything the app needs to artifacts/
 """
 
@@ -35,23 +35,25 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from pipeline import (
     ARTIFACTS, CATEGORICAL_FEATURES, NUMERIC_FEATURES, TARGET,
-    LogisticRegressionNN, business_cost, engineer_features, load_raw,
+    LogisticRegressionNN, engineer_features, load_raw, net_gain,
 )
 
 # ---------------------------------------------------------------------------
-# Business cost assumptions (ASSUMED, not from the data - change them here).
+# Money assumptions (ASSUMED, not from the data - change them here).
 # ---------------------------------------------------------------------------
-OFFER_COST = 50.0     # $ cost of one retention offer (e.g. a one-off discount)
+CALL_COST = 50.0      # $ we spend on every customer we call with a retention offer
 HORIZON_MONTHS = 12   # months of revenue lost when a customer churns
 SAVE_RATE = 0.30      # share of contacted would-be churners the offer retains
-# => missing a churner costs MonthlyCharges * 12 (~$900 for a typical churner);
-#    contacting a churner costs $50 + 70% of that; a false alarm costs $50.
-COSTS = dict(offer_cost=OFFER_COST, horizon_months=HORIZON_MONTHS, save_rate=SAVE_RATE)
+                      # (default in Verbraken, Verbeke & Baesens 2013: Beta(6,14), mean 0.30)
+# => vs doing nothing, calling a would-be churner gains on average
+#    0.30 * MonthlyCharges * 12 - $50 (~ +$220 for a $75/month customer);
+#    calling a customer who would stay anyway gains -$50.
+COSTS = dict(call_cost=CALL_COST, horizon_months=HORIZON_MONTHS, save_rate=SAVE_RATE)
 
 SEED = 42
 C_GRID = [0.01, 0.1, 1.0, 10.0]          # light tuning of L2 strength only
 THRESHOLDS = np.round(np.arange(0.01, 1.00, 0.01), 2)
-MANUAL_LR, MANUAL_EPOCHS = 2.0, 30_000   # plain full-batch GD; lr < 2/L (L = max curvature ~0.92) is stable
+MANUAL_LR, MANUAL_EPOCHS = 2.0, 30_000   # plain full-batch GD; lr < 2/L (L = max curvature ~0.97, so 2/L ~ 2.06) is stable
 
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -79,7 +81,7 @@ idx = np.arange(len(raw))
 idx_train, idx_tmp = train_test_split(idx, test_size=0.4, stratify=y_all, random_state=SEED)
 idx_val, idx_test = train_test_split(idx_tmp, test_size=0.5, stratify=y_all[idx_tmp], random_state=SEED)
 y_train, y_val, y_test = y_all[idx_train], y_all[idx_val], y_all[idx_test]
-mc_val = raw["MonthlyCharges"].to_numpy()[idx_val]     # needed for the $ cost
+mc_val = raw["MonthlyCharges"].to_numpy()[idx_val]     # needed for the $ net gain
 mc_test = raw["MonthlyCharges"].to_numpy()[idx_test]
 print(f"Split: train={len(idx_train)} val={len(idx_val)} test={len(idx_test)}")
 
@@ -207,9 +209,9 @@ coefs = {
 
 
 def best_threshold(y, p, mc):
-    """Threshold on the grid that minimises total business cost on (y, p)."""
-    costs = [business_cost(y, p >= t, mc, **COSTS) for t in THRESHOLDS]
-    return float(THRESHOLDS[int(np.argmin(costs))])
+    """Threshold on the grid that maximises the total net gain on (y, p)."""
+    gains = [net_gain(y, p >= t, mc, **COSTS) for t in THRESHOLDS]
+    return float(THRESHOLDS[int(np.argmax(gains))])
 
 
 def evaluate(y, p, threshold, mc):
@@ -222,8 +224,8 @@ def evaluate(y, p, threshold, mc):
         "recall": recall_score(y, pred),
         "f1": f1_score(y, pred),
         "n_contacted": int(pred.sum()),
-        "business_cost": business_cost(y, pred, mc, **COSTS),
-        "business_cost_at_0.5": business_cost(y, p >= 0.5, mc, **COSTS),
+        "net_gain": net_gain(y, pred, mc, **COSTS),
+        "net_gain_at_0.5": net_gain(y, p >= 0.5, mc, **COSTS),
     }
 
 
@@ -241,8 +243,8 @@ for name, contact in [("baseline_contact_nobody", np.zeros_like(y_test)),
         "precision": precision_score(y_test, contact, zero_division=0),
         "recall": recall_score(y_test, contact), "f1": f1_score(y_test, contact),
         "n_contacted": int(contact.sum()),
-        "business_cost": business_cost(y_test, contact, mc_test, **COSTS),
-        "business_cost_at_0.5": None,
+        "net_gain": net_gain(y_test, contact, mc_test, **COSTS),
+        "net_gain_at_0.5": None,
     }
 
 # Agreement between the three implementations.
@@ -258,7 +260,7 @@ agreement = {
 final_losses = {"sklearn": sk_loss, "torch_manual": manual_loss, "torch_nn": nn_loss}
 
 table = pd.DataFrame(results).T
-print("\nTEST SET RESULTS (threshold chosen on validation to minimise cost):")
+print("\nTEST SET RESULTS (threshold chosen on validation to maximise net gain):")
 print(table.to_string(float_format=lambda v: f"{v:,.4f}"))
 print("\nAgreement between implementations:")
 print(pd.DataFrame(agreement).T.to_string(float_format=lambda v: f"{v:.2e}"))
@@ -292,11 +294,6 @@ meta = {
                       for m, c in coefs.items()}},
     indent=2))
 table.to_csv(ARTIFACTS / "metrics.csv")
-# Markdown table written by hand (pandas.to_markdown needs an extra dependency).
-fmt = lambda v: "-" if v is None or (isinstance(v, float) and np.isnan(v)) else (f"{v:,.4f}" if isinstance(v, float) else str(v))
-md = ["| model | " + " | ".join(table.columns) + " |", "|" + "---|" * (len(table.columns) + 1)]
-md += [f"| {m} | " + " | ".join(fmt(v) for v in row) + " |" for m, row in table.iterrows()]
-(ARTIFACTS / "metrics.md").write_text("\n".join(md) + "\n")
 
 # Test-set predictions (for the record) and the raw test rows (the app
 # re-scores them with the saved models), plus all rows for distribution plots.
@@ -306,9 +303,9 @@ pd.DataFrame({"y_true": y_test, "MonthlyCharges": mc_test,
 raw.iloc[idx_test].to_csv(ARTIFACTS / "test_set.csv", index=False)
 split = np.empty(len(raw), dtype=object)
 split[idx_train], split[idx_val], split[idx_test] = "train", "val", "test"
-# Also keep raw columns the model does not use directly (gender, the 4 add-ons
-# that only enter via n_addons) so the dashboard can show why they were dropped.
-extra = ["tenure", "TotalCharges", "gender", "OnlineBackup", "DeviceProtection", "StreamingTV", "StreamingMovies"]
+# Also keep raw columns the model does not use directly (the 4 add-ons that
+# only enter via n_addons) so the dashboard can show why they were dropped.
+extra = ["tenure", "TotalCharges", "OnlineBackup", "DeviceProtection", "StreamingTV", "StreamingMovies"]
 dist = pd.concat([raw[extra], X_all, raw[[TARGET]]], axis=1)
 dist["split"] = split
 dist.to_csv(ARTIFACTS / "distributions.csv", index=False)

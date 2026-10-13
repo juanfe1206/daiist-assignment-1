@@ -2,13 +2,13 @@
 Shared code used by BOTH train.py and app.py.
 
 Keeping these pieces in one place guarantees that the app transforms data and
-computes the business cost exactly the way training did (no train/serve skew):
+computes the net gain exactly the way training did (no train/serve skew):
 
 - load_raw()            : read the committed CSV and fix data-quality issues
 - engineer_features()   : the feature engineering (pure function of one row,
                           so it is safe to apply before the split: nothing is
                           learned from the data here)
-- business_cost()       : the cost model behind the decision threshold
+- net_gain()            : the money model behind the decision threshold
 - LogisticRegressionNN  : the nn.Module used by the "standard PyTorch" model
 """
 
@@ -37,17 +37,18 @@ NUMERIC_FEATURES = [
     "SeniorCitizen",     # already 0/1
     "log_tenure",        # log1p(tenure): churn risk falls fastest in the first months
     "MonthlyCharges",    # current price level
-    "charge_diff",       # MonthlyCharges - historical average charge (price-change signal)
     "n_addons",          # number of add-on services (engagement / switching cost)
-    "fiber_x_monthly",   # interaction: fiber optic AND month-to-month contract
 ]
 # Of the 6 add-ons only the two "protective" services (OnlineSecurity,
 # TechSupport) are kept as individual dummies; the other four only enter via
 # n_addons. Keeping all six dummies AND n_addons would be perfectly collinear
 # (n_addons is exactly their sum), which makes the coefficients unidentifiable
 # and plain gradient descent converge very slowly.
+# gender is kept on purpose, for consistency with SeniorCitizen: both are
+# sensitive attributes, so we treat them the same way and keep both visible in
+# the model's weights (both end up near zero) rather than keeping only one.
 CATEGORICAL_FEATURES = [
-    "Partner", "Dependents", "PhoneService", "MultipleLines", "InternetService",
+    "gender", "Partner", "Dependents", "PhoneService", "MultipleLines", "InternetService",
     "OnlineSecurity", "TechSupport",
     "Contract", "PaperlessBilling", "PaymentMethod",
 ]
@@ -62,9 +63,8 @@ def load_raw(path: Path = DATA_PATH) -> pd.DataFrame:
     # All 11 have tenure == 0: brand-new customers who have not been billed yet.
     # They are NOT missing at random, so we do not drop or mean-impute them.
     # Choice: TotalCharges = MonthlyCharges (i.e. treat them as being in their
-    # first billing month, consistent with tenure being clipped to 1 below).
-    # This gives charge_diff = 0 for them ("no price change observed"), whereas
-    # setting TotalCharges = 0 would fake a large price increase.
+    # first billing month). The model no longer uses TotalCharges (see
+    # engineer_features), but the dashboard's distribution plots still do.
     total = pd.to_numeric(df["TotalCharges"], errors="coerce")
     df["TotalCharges"] = total.fillna(df["MonthlyCharges"])
 
@@ -89,45 +89,36 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # Engagement: how many add-ons the customer pays for (0-6).
     out["n_addons"] = (out[ADDON_COLS] == "Yes").sum(axis=1)
 
-    # Price-change signal: average historical monthly charge vs the current one.
-    # Positive charge_diff = the customer pays more now than they used to.
-    avg_charge = out["TotalCharges"] / out["tenure"].clip(lower=1)
-    out["charge_diff"] = out["MonthlyCharges"] - avg_charge
-
-    # Interaction: fiber optic and month-to-month are the two strongest risk
-    # factors; a linear model can only express "both together is worse than the
-    # sum" through an explicit product term.
-    out["fiber_x_monthly"] = (
-        (out["InternetService"] == "Fiber optic") & (out["Contract"] == "Month-to-month")
-    ).astype(int)
-
     # Dropped on purpose:
     # - customerID: an identifier, no predictive meaning (would only memorise rows)
     # - TotalCharges: ~ MonthlyCharges * tenure, so it is nearly collinear with
-    #   the two; its useful extra information is kept in charge_diff
+    #   the two. A price-change feature built from it (charge_diff = MonthlyCharges
+    #   - TotalCharges / tenure) was tested and dropped: its weight was ~0 and
+    #   removing it did not change validation performance (see REPORT.md).
     # - tenure (raw): replaced by log_tenure
-    # - gender: churn rates are almost identical by gender, and targeting a
-    #   commercial offer on gender is a fairness concern we do not need
+    # - fiber_x_monthly (fiber optic AND month-to-month) was tested and dropped:
+    #   on the log-odds scale the two risks do not compound (interaction ~ -0.35),
+    #   so its weight was ~0 and removing it did not change validation performance.
     return out[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
 
 
-def business_cost(y_true, contact, monthly_charges, offer_cost, horizon_months, save_rate):
-    """Total cost (in $) of a contact decision on a set of customers.
+def net_gain(y_true, contact, monthly_charges, call_cost, horizon_months, save_rate):
+    """Net gain (in $) of a call decision compared with doing nothing (calling nobody).
 
-    Per customer:
-      - not contacted & churns (FN): lose MonthlyCharges * horizon_months
-      - contacted & churns     (TP): pay the offer, and still lose the revenue
-                                     with probability (1 - save_rate)
-      - contacted & stays      (FP): pay the offer for nothing
-      - not contacted & stays  (TN): 0
+    y_true = 1 means the customer churned in the data, which was recorded with no
+    retention calls: i.e. the customer would leave if we do nothing. Per customer:
+      - called & would leave (TP): the offer keeps them with probability save_rate,
+                                   saving MonthlyCharges * horizon_months of revenue;
+                                   on average: save_rate * revenue - call_cost
+      - called & would stay  (FP): their revenue was never at risk: - call_cost
+      - not called           (FN, TN): same as doing nothing: 0
     """
     y_true = np.asarray(y_true).astype(bool)
     contact = np.asarray(contact).astype(bool)
-    lost = np.asarray(monthly_charges, dtype=float) * horizon_months
-    cost = np.where(contact, offer_cost, 0.0)
-    cost += np.where(y_true & ~contact, lost, 0.0)
-    cost += np.where(y_true & contact, (1 - save_rate) * lost, 0.0)
-    return float(cost.sum())
+    revenue = np.asarray(monthly_charges, dtype=float) * horizon_months
+    gain = np.where(contact & y_true, save_rate * revenue, 0.0)
+    gain -= np.where(contact, call_cost, 0.0)
+    return float(gain.sum())
 
 
 class LogisticRegressionNN(nn.Module):

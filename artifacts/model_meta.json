@@ -1,12 +1,11 @@
 {
-  "n_features": 20,
+  "n_features": 19,
   "feature_names": [
     "SeniorCitizen",
     "log_tenure",
     "MonthlyCharges",
-    "charge_diff",
     "n_addons",
-    "fiber_x_monthly",
+    "gender_Male",
     "Partner_Yes",
     "Dependents_Yes",
     "PhoneService_Yes",
@@ -26,11 +25,10 @@
     "SeniorCitizen",
     "log_tenure",
     "MonthlyCharges",
-    "charge_diff",
-    "n_addons",
-    "fiber_x_monthly"
+    "n_addons"
   ],
   "categorical_features": [
+    "gender",
     "Partner",
     "Dependents",
     "PhoneService",
@@ -48,17 +46,17 @@
     "torch_nn": 0.28
   },
   "costs": {
-    "offer_cost": 50.0,
+    "call_cost": 50.0,
     "horizon_months": 12,
     "save_rate": 0.3
   },
   "best_C": 10.0,
   "l2_coefficient_torch": 1.1834319526627219e-05,
   "val_logloss_by_C": {
-    "0.01": 0.41039278313022304,
-    "0.1": 0.3984917046477216,
-    "1.0": 0.3961872382087312,
-    "10.0": 0.3959111530346584
+    "0.01": 0.41406557090548446,
+    "0.1": 0.3991651735278143,
+    "1.0": 0.3965721732105683,
+    "10.0": 0.39628454717699674
   },
   "manual_lr": 2.0,
   "manual_epochs": 30000,

@@ -1,171 +1,164 @@
 # Assignment 1 Report
 
-*Delete this italic guidance as you fill in each section. You'll be asked to
-defend any of this without your code in front of you — write only what you
-can actually explain.*
-
-> STUDENT: the content under each heading is either (a) factual content taken
-> from the code and the training run, or (b) a `NOTES FOR YOU` block with
-> points to explain **in your own words**. Per the AI policy, the analysis and
-> conclusions must be yours: write the prose yourself and delete every
-> `NOTES FOR YOU` block (and this note) before submitting.
-
-- **Name**:
-- **Student ID**:
-- **Email**:
-- **Group**: [BBADBA 5A | BBADBA 5B | PPLEDBA 5A | BDBA 3A]
+- **Name**: Juan Felipe Ortiz Lejarde
+- **Student ID**: 20417
+- **Email**: jortiz.ieu2022@student.ie.edu
+- **Group**: BBADBA 5A
 
 ## Dataset
 
-*What is it, where did you get it, what does one row represent, how many
-rows/columns, and why did you pick it.*
+I picked the IBM Telco Customer Churn dataset from
+[IBM's GitHub repository](https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv)
+saved in `data/telco_churn.csv`. I chose this dataset because it has less than 10k rows which is within the
+expected value and it has valuable information that could build a good predictive model. Here is an overview
+of the features:
 
-Facts:
-- IBM Telco Customer Churn (sample dataset published by IBM), downloaded from
-  `https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv`,
-  committed as `data/telco_churn.csv`.
-- 7,043 rows x 21 columns. One row = one customer of a fictional US telecom
-  provider at a single snapshot in time.
-- Columns: `customerID`; demographics (`gender`, `SeniorCitizen`, `Partner`,
-  `Dependents`); account (`tenure` in months, `Contract`, `PaperlessBilling`,
-  `PaymentMethod`, `MonthlyCharges`, `TotalCharges`); services (`PhoneService`,
-  `MultipleLines`, `InternetService`, `OnlineSecurity`, `OnlineBackup`,
-  `DeviceProtection`, `TechSupport`, `StreamingTV`, `StreamingMovies`); target `Churn` (Yes/No).
-- Class balance: 1,869 churners (26.5%) vs 5,174 non-churners (73.5%).
-- Data-quality issue: 11 rows have a blank `TotalCharges`; all 11 have `tenure = 0`.
+7,043 rows x 21 columns. One row = one customer of a fictional US telecom provider at a single snapshot in
+time; there is no date column. Example: the first customer in the file.
 
-> NOTES FOR YOU (delete before submitting):
-> - Why you picked this dataset (a decision with a clear cost asymmetry; enough categorical structure that feature engineering matters).
-> - What one row represents, and that there is no date column (this matters for the split).
+| Group | Columns | Kind of data | Example (customer `7590-VHVEG`) |
+|---|---|---|---|
+| Identifier | `customerID` | Unique ID | 7590-VHVEG |
+| Demographics | `gender`, `SeniorCitizen`, `Partner`, `Dependents` | Categorical (Yes/No, Female/Male, 0/1) | Female, 0, Yes, No |
+| Account | `tenure` | Numeric (months as a customer, 0-72) | 1 |
+| | `Contract`, `PaperlessBilling`, `PaymentMethod` | Categorical | Month-to-month, Yes, Electronic check |
+| Charges | `MonthlyCharges`, `TotalCharges` | Numeric ($) | 29.85, 29.85 |
+| Phone services | `PhoneService`, `MultipleLines` | Categorical | No, No phone service |
+| Internet services | `InternetService` | Categorical (DSL / Fiber optic / No) | DSL |
+| | `OnlineSecurity`, `OnlineBackup`, `DeviceProtection`, `TechSupport`, `StreamingTV`, `StreamingMovies` | Categorical (Yes / No / No internet service) | No, Yes, No, No, No, No |
+| **Target** | `Churn` | Categorical (Yes/No) | No |
+
+The goal is to predict whether a user will churn. This is a very interesting task because of the inherent
+class imbalance (1,869 churners, 26.5%, vs 5,174 non-churners, 73.5%) and its potential to gain extra
+revenue that otherwise would be lost if the model performs well.
 
 ## Business / real-life framing
 
-*The hypothetical scenario this model serves, and what that scenario implies
-for how you built the pipeline — target definition, whether a time-based
-split was necessary and why (or why not), which metric should drive the
-decision threshold and why.*
+Losing a customer is very costly for any company, and companies have been trying to solve this problem for
+a long time. The first step to avoid the lost revenue is to understand why people leave, and then act before
+they do so the company prevents as much of it as possible.
 
-Facts (as implemented):
-- Decision supported: which customers a retention team should contact with a
-  retention offer. Contact if predicted P(churn) >= threshold.
-- Cost model (constants at the top of `train.py`, all ASSUMED):
-  - `OFFER_COST = $50` per contacted customer
-  - `HORIZON_MONTHS = 12`: a churner is worth `MonthlyCharges x 12` of lost revenue
-  - `SAVE_RATE = 0.30`: the offer retains 30% of contacted would-be churners
-  - Per customer: missed churner (FN) = MonthlyCharges x 12; contacted churner (TP)
-    = $50 + 0.7 x MonthlyCharges x 12; false alarm (FP) = $50; TN = $0.
-- Threshold: the value on a 0.01 grid that minimises total cost on the
-  **validation** set (chosen: 0.28 for all three models). Not 0.5.
-- Split: stratified random 60/20/20 (train 4,225 / validation 1,409 / test 1,409), seed 42.
-  Churn rate is 26.5% in each split.
-- Also reported: ROC-AUC, PR-AUC, precision, recall, F1.
+A target of 1 means the customer left (`Churn = Yes`). Each of those customers is something the company can learn
+from, so that it can stop others from going down the same path. Once the model is trained, the company has valuable
+information it can use to avoid churn. A company that does nothing will inevitably lose customers. A company
+that calls everyone wastes money on people who weren't even planning on leaving, which lowers what the
+campaign earns. It could even push some of them to start thinking about churning.
 
-> NOTES FOR YOU (delete before submitting):
-> - Why a cost-based threshold rather than 0.5 or accuracy: errors have very different costs (a missed churner ~ $900 vs a $50 offer), so the cheapest threshold is well below 0.5.
-> - Why a time-based split is impossible here (single snapshot, no dates) and why a stratified random split is acceptable; why `tenure` is a customer attribute (a feature) and not a time index.
-> - Why validation is used for choosing C and the threshold, and test is touched only once for final numbers.
-> - The cost constants are assumptions; say how the decision would change if they were different (try the inputs in the dashboard's "Threshold & cost" tab).
+These are the assumptions I made. The save rate of 0.30 comes from Verbraken, Verbeke & Baesens (2013),
+"A Novel Profit Maximizing Metric for Measuring Classification Performance of Customer Churn Prediction
+Models", *IEEE Transactions on Knowledge and Data Engineering*, where it is the default offer-acceptance rate.
+
+- Call cost: $50 per customer called.
+- Horizon: a customer who leaves takes 12 months of their monthly bill with them (MonthlyCharges x 12).
+- Save rate: the offer keeps 30% of the called customers who would otherwise leave.
+
+After studying the data, I set a gain-based threshold instead of 0.5. Compared with doing nothing, calling a
+customer who would leave gains on average 0.30 x MonthlyCharges x 12 - $50 (about +$220 for a $75/month
+customer), while calling a customer who would stay loses $50. The threshold that gives the highest net gain on
+the validation set is 0.28 for all three models. On the test set, this gives a net gain of $53,450, compared
+with $39,189 at a 0.5 threshold and $30,941 when calling everyone.
+
+I used a stratified split to account for the class imbalance: it keeps the same churn rate in each split
+(26.5% in train, validation and test). I split the dataset into three parts, train (60%, 4,225 customers),
+validation (20%, 1,409) and test (20%, 1,409), so that each one has a separate job. The models learn their
+weights on train, and every choice (the regularisation strength C, the features I kept and the threshold) is
+made on validation. The test set stays hidden until the very end and is used only once, for the final numbers.
+If I made choices by looking at the test set, its results would be too optimistic, so keeping it untouched is
+what tells me whether the model really generalises to customers it has never seen.
+
+I didn't use a time-based split because the dataset is a single snapshot in time and it doesn't have dates,
+so there is no way to know which customers came earlier or later.
 
 ## Data preparation & feature engineering
 
-*What you engineered and why, and any data-quality decisions you made along
-the way — e.g. "segment X had defective data, so I excluded it and used a
-population-average default for scope Y at inference time; the impact of
-that choice is Z."*
+When I first looked at the data, I found 11 missing values in `TotalCharges`. They belong to customers
+with a tenure of 0, who had never been billed. I fixed this by setting their total to their `MonthlyCharges`,
+assuming it was their first month.
 
-Facts (code in `pipeline.py` and `train.py`):
-1. `TotalCharges` blanks (11 rows, all tenure 0) set to `MonthlyCharges` (treated as first billing month).
-2. `Churn` mapped to 1/0.
-3. "No internet service" collapsed to "No" in the 6 add-on columns; "No phone service" collapsed to "No" in `MultipleLines`.
-4. `log_tenure = log(1 + tenure)` replaces raw `tenure`.
-5. `n_addons` = number of the 6 internet add-ons the customer has (0-6).
-6. `charge_diff = MonthlyCharges - TotalCharges / max(tenure, 1)` (current price vs historical average).
-7. `fiber_x_monthly` = 1 if fiber optic internet AND month-to-month contract.
-8. Dropped: `customerID` (identifier), `TotalCharges` (~ MonthlyCharges x tenure), raw `tenure`, `gender`
-   (churn 26.9% female vs 26.2% male), and the individual dummies of `OnlineBackup`, `DeviceProtection`,
-   `StreamingTV`, `StreamingMovies` (they enter only through `n_addons`; keeping them would make `n_addons` exactly collinear).
-9. Final model inputs: 6 numeric (`SeniorCitizen`, `log_tenure`, `MonthlyCharges`, `charge_diff`, `n_addons`,
-   `fiber_x_monthly`) + 10 categorical (`Partner`, `Dependents`, `PhoneService`, `MultipleLines`, `InternetService`,
-   `OnlineSecurity`, `TechSupport`, `Contract`, `PaperlessBilling`, `PaymentMethod`) = 20 model columns after encoding.
-10. `ColumnTransformer` fitted on the training split only: `StandardScaler` on numerics,
-    `OneHotEncoder(drop="first", handle_unknown="ignore")` on categoricals. Validation and test are only transformed.
-11. Observation from the run: `MonthlyCharges` is almost a linear combination of the service columns
-    (smallest eigenvalue of the scaled design matrix ~0.0014), so the coefficients of `MonthlyCharges`,
-    `PhoneService` and `InternetService` are not individually reliable.
+Then I cleaned the variables to reduce redundancy. For example, the six internet add-on columns (such as
+`OnlineSecurity`) had a third value, "No internet service", which only repeats `InternetService = No`. I
+turned it into a plain "No", and did the same with "No phone service" in `MultipleLines`.
 
-> NOTES FOR YOU (delete before submitting):
-> - Justify each step in your own words, especially the TotalCharges choice (why not drop the rows or set 0: setting 0 would fake a huge price increase in `charge_diff`).
-> - Why fit the preprocessor on train only (leakage), and why feature engineering before the split is safe here (row-wise, learns nothing).
-> - Why `drop="first"` (collinearity with the intercept; reference levels: Month-to-month, DSL, Bank transfer) and why scaling matters for L2 and for gradient descent.
-> - Honest finding: `charge_diff` (coef -0.015) and `fiber_x_monthly` (+0.043) ended up contributing very little. Explain why you kept them or whether you would drop them.
-> - The collinearity of MonthlyCharges with the services (fiber has a negative coefficient while MonthlyCharges is strongly positive: they partly cancel).
+Looking more closely, I found a very important insight in the relationship between tenure and churn: newer
+customers are much more likely to churn than older ones. Churn is 62.0% in the first month, 35.9% at 7-12
+months and only 6.6% after five years, so it drops fast at the start and then flattens. A linear relationship
+would not capture all of the information in this variable, so I took the log of tenure, log(1 + tenure). On
+the validation set, this improved the log loss from 0.4018 to 0.3959 and the PR-AUC from 0.677 to 0.690, a
+small but consistent gain.
+
+I then used ablation to check whether I had included variables that weren't really necessary, and found
+that two of my engineered features, `charge_diff` (the change in a customer's price over time) and
+`fiber_x_monthly` (fiber optic and a month-to-month contract together), had a negligible effect on the final
+prediction: removing either one changed the validation metrics only in the fourth decimal (see the table
+below). I decided to drop them, prioritising model explainability over a tiny difference in the metrics.
+
+| Variable tested | Decision | Reason |
+|---|---|---|
+| Raw `tenure` | Replaced by `log_tenure` | Churn falls fast in the first months and then flattens; the log fits that shape better (validation log loss 0.4018 vs 0.3959) |
+| `charge_diff` | Dropped | Weight ~0 (-0.015); its U-shaped pattern is explained by tenure, price and contract, which are already in the model |
+| `fiber_x_monthly` | Dropped | Weight ~0 (+0.043); on the log-odds scale the two risks do not add up to more than their sum, so the interaction adds nothing |
+| `OnlineBackup`, `DeviceProtection`, `StreamingTV`, `StreamingMovies` as separate columns | Only counted through `n_addons` | Giving each its own weight did not improve validation, and together with `n_addons` they would be exact duplicates |
+
+I used a standard scaler for the numerical features, so that they are all on the same scale: the
+regularisation then treats every feature equally, and gradient descent converges faster. For the categorical
+features I used a one-hot encoder, which creates n - 1 columns for a feature with n levels, since having all
+columns equal to 0 already means the base level. Both were fitted on the training set only and then applied
+to validation and test.
+
+Final model: 4 numeric features (`SeniorCitizen`, `log_tenure`, `MonthlyCharges`, `n_addons`) and 11 categorical
+ones (`gender`, `Partner`, `Dependents`, `PhoneService`, `MultipleLines`, `InternetService`, `OnlineSecurity`,
+`TechSupport`, `Contract`, `PaperlessBilling`, `PaymentMethod`), giving 19 columns after encoding. I kept both
+`gender` and `SeniorCitizen` for consistency, since both are sensitive attributes and both have near-zero
+weights (+0.041 and +0.059).
 
 ## Modeling: three implementations, one model
 
-*Which model (linear or logistic regression) and why. A results table
-comparing scikit-learn, the manual PyTorch loop, and the standard
-torch.nn.Module/torch.optim workflow, on the same test set, against the
-naive baseline. Do the three agree? If not, why not?*
+I used a logistic regression because this is a classification problem: the target is binary (the customer
+churns or not), and the model outputs a probability of churning that the threshold turns into a decision.
 
-Facts:
-- Model: L2-regularised logistic regression (binary target).
-- C chosen on validation log loss from {0.01, 0.1, 1, 10}: 0.4104, 0.3985, 0.3962, 0.3959 -> **C = 10**.
-- The same objective in all three: mean BCE + ||w||^2 / (2 x C x n_train), bias not penalised
-  (equivalent to sklearn's `C x sum(logloss) + 0.5 ||w||^2`). Float64 everywhere.
-  1. scikit-learn `LogisticRegression(C=10, solver="lbfgs")`.
-  2. Manual PyTorch: raw tensors, numerically stable BCE written by hand, `loss.backward()`,
-     update inside `torch.no_grad()`, grads zeroed; full-batch gradient descent, lr = 2.0, 30,000 epochs.
-  3. Standard PyTorch: `nn.Module` with one `nn.Linear`, `BCEWithLogitsLoss`, `torch.optim.LBFGS` (strong Wolfe line search).
-- Final penalised training loss: 0.40810605 for all three.
+I also used L2 (ridge) regularisation, which keeps the weights from growing too large and helps with
+multicollinearity: `MonthlyCharges` is almost a combination of the service columns, and the penalty keeps
+those weights stable. I chose the regularisation strength C by testing several values ({0.01, 0.1, 1, 10})
+and keeping the one with the lowest log loss on the validation set (C = 10).
 
-Test-set results (1,409 customers; threshold chosen on validation):
+These are the three implementations I used, all trained on the same split and minimising the same objective
+(mean log loss + the same L2 penalty, bias not penalised, float64):
 
-| Model | ROC-AUC | PR-AUC | Threshold | Precision | Recall | F1 | Contacted | Business cost | Cost at 0.5 |
-|---|---|---|---|---|---|---|---|---|---|
-| scikit-learn | 0.8399 | 0.6558 | 0.28 | 0.5214 | 0.7834 | 0.6261 | 562 | $284,573 | $298,190 |
-| Manual PyTorch | 0.8399 | 0.6558 | 0.28 | 0.5214 | 0.7834 | 0.6261 | 562 | $284,573 | $298,190 |
-| Standard PyTorch | 0.8399 | 0.6558 | 0.28 | 0.5214 | 0.7834 | 0.6261 | 562 | $284,573 | $298,190 |
-| Baseline: contact nobody | 0.5 | 0.2654 | - | 0 | 0 | 0 | 0 | $337,971 | - |
-| Baseline: contact everyone | 0.5 | 0.2654 | - | 0.2654 | 1.0 | 0.4195 | 1,409 | $307,030 | - |
+1. **scikit-learn:** `LogisticRegression(C=10, solver="lbfgs")`.
+2. **Manual PyTorch:** raw tensors, a hand-written log loss, `loss.backward()` for the gradients and a
+   hand-written gradient descent step (learning rate 2.0, 30,000 epochs).
+3. **Standard PyTorch:** an `nn.Module` with one `nn.Linear` layer, `BCEWithLogitsLoss` and the
+   `torch.optim.LBFGS` optimiser.
 
-Agreement (max absolute difference on test):
+Results on the test set (1,409 customers, threshold chosen on validation; net gain is compared with doing
+nothing):
 
-| Pair | Coefficients | Predicted probabilities |
-|---|---|---|
-| sklearn vs manual PyTorch | 1.4e-06 | 3.9e-07 |
-| sklearn vs standard PyTorch | 1.3e-06 | 5.9e-07 |
-| manual vs standard PyTorch | 4.7e-07 | 2.6e-07 |
+| Model | ROC-AUC | PR-AUC | Threshold | Precision | Recall | Called | Net gain | Net gain at 0.5 |
+|---|---|---|---|---|---|---|---|---|
+| scikit-learn | 0.840 | 0.655 | 0.28 | 52.0% | 78.6% | 565 | $53,450 | $39,189 |
+| Manual PyTorch | 0.840 | 0.655 | 0.28 | 52.0% | 78.6% | 565 | $53,450 | $39,189 |
+| Standard PyTorch | 0.840 | 0.655 | 0.28 | 52.0% | 78.6% | 565 | $53,450 | $39,189 |
+| Baseline: call nobody | 0.5 | 0.265 | - | - | 0% | 0 | $0 | - |
+| Baseline: call everyone | 0.5 | 0.265 | - | 26.5% | 100% | 1,409 | $30,941 | - |
 
-> NOTES FOR YOU (delete before submitting):
-> - Why the three agree (same convex objective with a unique optimum, same data, matched L2 penalty, float64, trained to convergence).
-> - What went wrong first: with all one-hot levels kept and all six add-on dummies plus `n_addons`, the manual gradient-descent model was still far from the optimum after 20,000 steps (coefficients off by ~2, probabilities by ~0.018) while LBFGS had converged. The cause was exact collinearity (an ill-conditioned problem). Removing it, and raising the learning rate to 2.0 (below the stability limit 2/L, L ~ 0.92), fixed it.
-> - The model saves ~$22,500 (7%) on the test set vs the best naive baseline (contact everyone), and ~$13,600 vs using 0.5 as the threshold. Say what that means for the business.
-> - C = 10 is the edge of the grid (weakest regularisation): with 4,225 rows and 20 features, regularisation barely helps here.
+Compared with the best naive baseline (calling everyone), my model makes about $22,500 more ($53,450 vs
+$30,941) while making 60% fewer calls (565 instead of 1,409).
 
 ## Limitations & next steps
 
-*Real limitations you found, and concretely how you'd address each one with
-more time or data — not generic hedging.*
-
-> NOTES FOR YOU (delete before submitting): write real limitations with a concrete fix for each, e.g.
-> - Costs are assumed (offer cost, 12-month horizon, 30% save rate); with data from a real retention campaign you would estimate them, or model uplift (who is *persuadable*) rather than churn risk.
-> - No time dimension: a random split cannot test whether the model holds up on future customers; with snapshot dates you would use a time-based split.
-> - Sample US dataset of unknown age; may not transfer to a real (e.g. Spanish) operator.
-> - Correlated features (MonthlyCharges vs services) make individual coefficients hard to interpret.
-> - Linear decision boundary; only one hand-made interaction. Could try more interactions or a tree model as a comparison.
-> - One threshold for all customers, although the cost of a miss depends on MonthlyCharges: you could contact when the expected saving p x 0.3 x 12 x MonthlyCharges > $50 instead.
-> - The threshold was chosen on 1,409 validation rows; the cost curve is fairly flat near the optimum (see dashboard), so the exact value is noisy.
+1. **Size of the dataset.** With 7,043 customers the dataset is very small, and the three-way split reduces
+   it further: the test set has only 1,409 customers (374 churners), so a few customers can move the net gain
+   by thousands of dollars. More data, or cross-validation instead of a single validation set, would make the
+   results more reliable.
+2. **The costs are assumed.** The call cost, the 12-month horizon and the 30% save rate are not measured on
+   this company. I would need real data from a retention campaign (calling a random group and comparing its
+   churn with a similar group that was not called) to estimate them.
+3. **One threshold for everyone.** The value of saving a customer depends on their bill, so I could set
+   different thresholds for different customers, for example calling when p x 0.3 x 12 x MonthlyCharges is
+   above $50. Clustering customers into segments and setting a threshold per segment would also help.
+4. **Only a linear model.** I would like to test more flexible models such as Random Forest or XGBoost, to see
+   if they can capture patterns that logistic regression misses and improve the performance.
 
 ## Generative AI use disclosure
 
-*Per the syllabus AI Policy: what you used and how, or "no AI content used."*
-
-> STUDENT: draft below, edit so it is accurate.
-
-Claude (Anthropic) was used to generate the code for data loading, the
-preprocessing pipeline, the three model implementations, saving artifacts and
-the Gradio dashboard, following decisions made by the student (dataset choice,
-business framing, cost-based threshold, split strategy, features to build). It
-also filled in the factual parts of this report (dataset facts, list of
-processing steps, results tables from the training run). The analysis,
-interpretation and conclusions in this report were written by the student.
+AI was used to generate parts of the code, pipeline and the gradio dashboard. All design choices were made by me. AI was also ran to run multiple tests to make ensure the robustness of the pipeline. 
